@@ -1,4 +1,5 @@
 import time, threading, sys, os
+import json
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 from kortex_api.autogen.client_stubs.BaseClientRpc import BaseClient
@@ -33,40 +34,62 @@ class ActionStats:
 
 stats = ActionStats()
 
-# ---------- per action ----------
-def cartesian_action_movement(base, base_cyclic):
-    start = time.perf_counter()
+def gripper_move(base, percent: float, timeout=3.0):
+    goal = Base_pb2.GripperCommand()
+    goal.mode = Base_pb2.GRIPPER_POSITION
+    goal.gripper.finger.add().value = percent   # 0=open 1=close
 
+    e = threading.Event()
+    h = base.OnNotificationGripperTopic(
+        lambda n, _: e.set() if n.gripper_event ==
+                             Base_pb2.GRIPPER_MOVEMENT_COMPLETED else None,
+        Base_pb2.NotificationOptions())
+
+    base.SendGripperCommand(goal)
+    ok = e.wait(timeout)
+    base.Unsubscribe(h)
+    return ok
+
+# ---------- per action ----------
+def cartesian_action_movement(base, base_cyclic, command):
+    start = time.perf_counter()
+    
     action = Base_pb2.Action()
     fb = base_cyclic.RefreshFeedback()
     pose = action.reach_pose.target_pose
-    pose.x = fb.base.tool_pose_x
-    pose.y = fb.base.tool_pose_y - 0.1
-    pose.z = fb.base.tool_pose_z - 0.2
-    pose.theta_x = fb.base.tool_pose_theta_x
-    pose.theta_y = fb.base.tool_pose_theta_y
-    pose.theta_z = fb.base.tool_pose_theta_z
+    pose.x = fb.base.tool_pose_x + command["world_vector"][0]
+    pose.y = fb.base.tool_pose_y + command["world_vector"][1]
+    pose.z = fb.base.tool_pose_z + command["world_vector"][2]
+    pose.theta_x = fb.base.tool_pose_theta_x + command["rotation_delta"][0]
+    pose.theta_y = fb.base.tool_pose_theta_y + command["rotation_delta"][1]
+    pose.theta_z = fb.base.tool_pose_theta_z + command["rotation_delta"][2]
 
     e = threading.Event()
     h = base.OnNotificationActionTopic(check_for_end_or_abort(e),
                                        Base_pb2.NotificationOptions())
     base.ExecuteAction(action)
-    ok = e.wait(TIMEOUT_S)
+    ok_arm = e.wait(TIMEOUT_S)
     base.Unsubscribe(h)
 
-    return time.perf_counter() - start, ok
+    grip_val = command["open_gripper"][0]
+    ok_grip = True
+    if grip_val is not None:
+        ok_grip = gripper_move(base, grip_val)
+
+    elapsed = time.perf_counter() - start
+    return elapsed, (ok_arm and ok_grip)
 
 # ---------- test loop ----------
-def test(base, base_cyclic, txt="test.txt", hz=10):
+def test(base, base_cyclic, txt="../test.txt", hz=10):
     interval = 1/hz
     t_next = time.perf_counter()
 
     with open(txt, encoding="utf-8") as f:
         for line in f:
-            print(line.rstrip())
+            command = json.loads(line)
 
             fut = WORKERS.submit(cartesian_action_movement,
-                                 base, base_cyclic)
+                                 base, base_cyclic, command)
             try:
                 elapsed, ok = fut.result(timeout=TIMEOUT_S+0.2)
                 stats.add(elapsed, ok, timed_out=0)
@@ -92,7 +115,8 @@ def main() -> int:
         base        = BaseClient(router)
         base_cyclic = BaseCyclicClient(router)
 
-        test(base, base_cyclic, txt="test.txt", hz=10)
+        test(base, base_cyclic, txt="../test.txt", hz=10)
+
     return 0
 
 if __name__ == "__main__":
