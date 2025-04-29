@@ -1,6 +1,7 @@
 import time, threading, sys, os
 import json
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+import ast, numpy as np
 
 from kortex_api.autogen.client_stubs.BaseClientRpc import BaseClient
 from kortex_api.autogen.client_stubs.BaseCyclicClientRpc import BaseCyclicClient
@@ -115,7 +116,7 @@ def main() -> int:
         base        = BaseClient(router)
         base_cyclic = BaseCyclicClient(router)
 
-        test(base, base_cyclic, txt="../test.txt", hz=10)
+        test(base, base_cyclic, txt="../test.jsonl", hz=10)
 
     return 0
 
