@@ -1,0 +1,1 @@
+# This is a small test repo for kinova gen3 robotic arms to interpret 7-degree of freesom and do actions accordingly.
